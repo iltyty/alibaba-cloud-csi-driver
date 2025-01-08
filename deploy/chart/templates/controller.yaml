@@ -6,6 +6,22 @@ metadata:
   namespace: {{ .Release.Namespace }}
   annotations:
     csi.alibabacloud.com/default-ossfs-tag: {{ .Values.images.ossfs.tag }}
+{{- if .Values.deploy.akless }}
+    pod.alibabacloud.com/appgroup-auto-creation: "true"
+    secret-csi.alibabacloud.com/inject-containers: "csi-provisioner"
+  labels:
+    alibabacloud.com/app-name: alibaba-cloud-csi-controller
+    alibabacloud.com/server-group: alibaba-cloud-csi-controller-{{ .Values.ASIOps.Cluster.Region }}
+    {{- if eq .Values.ASIOps.Cluster.Environment "testing" }}
+    alibabacloud.com/app-stage: DAILY
+    {{- else if eq .Values.ASIOps.Cluster.Environment "staging" }}
+    alibabacloud.com/app-stage: PRE_PUBLISH
+    {{- else }}
+    alibabcloud.com/app-stage: PUBLISH
+    {{- end }}
+    alibabacloud.com/enable-akless: "true"
+    secret-csi.alibabacloud.com/enable: "true"
+{{- end }}
 spec:
   selector:
     matchLabels:
@@ -51,6 +67,12 @@ spec:
                 operator: NotIn
                 values:
                 - "true"
+            {{- if .Values.deploy.akless }}
+              - key: secret-csi.alibabacloud.com/enabled
+                operator: In
+                values:
+                - "true"
+            {{- end }}
         {{- end }}
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -341,6 +363,24 @@ spec:
             - name: ENABLE_NAS_SUBPATH_FINALIZER
               value: "true"
 {{- end }}
+{{- if .Values.deploy.akless }}
+            - name: USE_OIDC_AUTH_INNDER
+              value: "true"
+            - name: TRUSTED_PROVIDER_REGION
+              value: {{ .Values.ASIOps.Cluster.Region }}
+            - name: SIGMA_APP_NAME
+              value: alibaba-cloud-csi-controller
+            - name: SIGMA_APP_GROUP
+              value: alibaba-cloud-csi-controller-{{ .Values.ASIOps.Cluster.Region }}
+            - name: SIGMA_APP_STAGE
+            {{- if eq .Values.ASIOps.Cluster.Environment "testing" }}
+              value: DAILY
+            {{- else if eq .Values.ASIOps.Cluster.Environment "staging" }}
+              value: PRE_PUBLISH
+            {{- else }}
+              value: PUBLISH
+            {{- end }}
+{{- end }}
 {{- include "akEnv" .Values.deploy.accessKey | nindent 12 }}
           livenessProbe:
             httpGet:
@@ -370,6 +410,11 @@ spec:
             - mountPath: /var/addon
               name: addon-token
               readOnly: true
+{{- end }}
+{{- if .Values.deploy.akless  }}
+            - name: secret-volume-secrets-store-csi-k8s-io
+              readOnly: true
+              mountPath: /trusted-provider/
 {{- end }}
           resources:
             limits:
@@ -466,4 +511,12 @@ spec:
             secretName: addon.csi.token
 {{- end }}
 {{- end -}}
+{{- if .Values.deploy.akless}}
+        - name: secret-volume-secrets-store-csi-k8s-io
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretsProvider: alibaba-cloud-asi-akless
+{{- end }}
 {{- end -}}
