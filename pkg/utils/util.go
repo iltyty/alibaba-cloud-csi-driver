@@ -315,7 +315,9 @@ func NewEcsClient(ac AccessControl) (ecsClient *ecs.Client) {
 		ecsClient, err = ecs.NewClientWithOptions(DefaultRegion, ac.Config, ac.Credential)
 	default:
 		ecsClient, err = ecs.NewClientWithStsToken(DefaultRegion, ac.AccessKeyID, ac.AccessKeySecret, ac.StsToken)
-
+		if ac.UseMode == OIDCToken {
+			ecsClient.SetSigner(ac.Signer)
+		}
 	}
 
 	if err != nil {
@@ -338,7 +340,9 @@ func NewStsClient(ac AccessControl) (stsClient *sts.Client) {
 		stsClient, err = sts.NewClientWithOptions(DefaultRegion, ac.Config, ac.Credential)
 	default:
 		stsClient, err = sts.NewClientWithStsToken(DefaultRegion, ac.AccessKeyID, ac.AccessKeySecret, ac.StsToken)
-
+		if ac.UseMode == OIDCToken {
+			stsClient.SetSigner(ac.Signer)
+		}
 	}
 
 	if err != nil {

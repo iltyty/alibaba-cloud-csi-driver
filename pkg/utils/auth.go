@@ -32,7 +32,7 @@ import (
 	cre "github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth/credentials"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth/credentials/provider"
 	crev2 "github.com/aliyun/credentials-go/credentials"
-	oidc "github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/auth"
+	credential_provider_factory "github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/credential/factory"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/utils/crypto"
 	"k8s.io/klog/v2"
 )
@@ -43,6 +43,12 @@ const (
 
 	addonTokenExpirationFormat = "2006-01-02T15:04:05Z"
 	addonTokenExpirationScale  = 0.9
+
+	authInnerEnv  = "USE_OIDC_AUTH_INNER"
+	appName       = "alibaba-cloud-csi-controller"
+	roleArnTmpl   = "acs:ram::%s:role/%s" // acs:ram::<account-id>:role/<role-name>
+	accountUIDEnv = "AKLESS_ACCOUNT_UID"
+	roleNameEnv   = "AKLESS_ROLE_NAME"
 )
 
 // AKInfo access key info
@@ -92,6 +98,7 @@ type AccessControl struct {
 	StsToken        string
 	RoleArn         string
 	Config          *sdk.Config
+	Signer          auth.Signer
 	Credential      auth.Credential
 	UseMode         AccessControlMode
 }
@@ -127,57 +134,49 @@ func getManagedAddonToken() AccessControl {
 	return AccessControl{AccessKeyID: tokens.AccessKeyID, AccessKeySecret: tokens.AccessKeySecret, StsToken: tokens.SecurityToken, UseMode: ManagedToken, Config: config, Credential: credent}
 }
 
-// GetAccessControl  1、Read default ak from local file. 2、If local default ak is not exist, then read from STS.
-func GetAccessControl() AccessControl {
-
-	oidcToken := getOIDCToken()
-	if oidcToken.AccessKeyID != "" {
-		klog.Info("Get AK: USE OIDC token")
-		return oidcToken
+func GetAccessControl(tryAKless bool) AccessControl {
+	if tryAKless {
+		oidcToken := getOIDCToken()
+		if oidcToken.Signer != nil {
+			klog.Info("Get AK: USE OIDC token")
+			return oidcToken
+		}
 	}
 
-	//1、Get AK from Env
 	acLocalAK := GetEnvAK()
 	if len(acLocalAK.AccessKeyID) != 0 && len(acLocalAK.AccessKeySecret) != 0 {
 		klog.Info("Get AK: use ENV AK")
 		return acLocalAK
 	}
 
-	//2、Get AK from Credential Files
 	acCredentialAK := getCredentialAK()
 	if acCredentialAK.Config != nil && acCredentialAK.Credential != nil {
 		klog.Info("Get AK: use Credential AK")
 		return acCredentialAK
 	}
 
-	//3、Get AK from ManagedToken
 	acAddonToken := getManagedAddonToken()
 	if len(acAddonToken.AccessKeyID) != 0 {
 		klog.Info("Get AK: use Managed Addon Token")
 		return acAddonToken
 	}
 
-	//4、Get AK from ECS StsToken
 	acStsToken := getStsToken()
 	klog.Info("Get AK: use ECS RamRole Token")
 	return acStsToken
 }
 
-var oidcProvider oidc.Provider
+var signer auth.Signer
 
 func getOIDCToken() AccessControl {
-
-	if os.Getenv("USE_OIDC_AUTH_INNER") != "true" {
+	if os.Getenv(authInnerEnv) != "true" {
 		return AccessControl{}
 	}
-	if oidcProvider != nil {
-		klog.Infof("getOIDCToken: use exists provider")
-		resp, err := oidcProvider.GetStsTokenWithCache()
-		if err != nil || resp == nil {
-			klog.Errorf("getOIDCtoken: failed to assume role with oidc : %++v", err)
-			return AccessControl{}
+	if signer != nil {
+		klog.Infof("getOIDCToken: use existing signer")
+		return AccessControl{
+			Signer: signer,
 		}
-		return AccessControl{AccessKeyID: strings.TrimSpace(resp.Credentials.AccessKeyId), AccessKeySecret: strings.TrimSpace(resp.Credentials.AccessKeySecret), StsToken: strings.TrimSpace(resp.Credentials.SecurityToken), UseMode: OIDCToken}
 	}
 
 	regionID := os.Getenv("REGION_ID")
@@ -188,34 +187,30 @@ func getOIDCToken() AccessControl {
 		klog.Error("getOIDCToken: failed to get regionid from metadata server")
 		return AccessControl{}
 	}
-	ownerId := os.Getenv("ACCOUNT_ID")
-	if ownerId == "" {
-		ownerId = RetryGetMetaData("owner-account-id")
-	}
-	klog.Infof("getOIDCToken: cluster owner id: %v", ownerId)
-	if ownerId == "" {
-		klog.Error("getOIDCToken: failed to get cluster owner id from metadata server")
-		return AccessControl{}
-	}
 
-	oidcProvider = oidc.NewOIDCProviderVPC(
-		regionID,
-		"alibaba-cloud-csi-controller",
-		"alibaba-cloud-csi-controller-oidc-provider",
-		"alibaba-cloud-csi-controller-oidc-role",
-		ownerId,
-		time.Duration(1000)*time.Second)
-	if oidcProvider == nil {
-		klog.Errorf("getOIDCtoken: get empty provider")
+	ramRoleArn, err := getAKlessRamRoleArn()
+	if err != nil {
+		klog.Errorf("getOIDCToken: failed to get akless ram role arn: %v", err)
 		return AccessControl{}
 	}
-	resp, err := oidcProvider.GetStsTokenWithCache()
-	if err != nil || resp == nil {
-		klog.Errorf("getOIDCtoken: failed to assume role with oidc : %++v", err)
+	signer, err := credential_provider_factory.GetOpenSDKV1Signer(ramRoleArn)
+	if err != nil {
+		klog.Errorf("getOIDCToken: failed to get opensdk v1 signer: %v", err)
 		return AccessControl{}
 	}
-	return AccessControl{AccessKeyID: strings.TrimSpace(resp.Credentials.AccessKeyId), AccessKeySecret: strings.TrimSpace(resp.Credentials.AccessKeySecret), StsToken: strings.TrimSpace(resp.Credentials.SecurityToken), UseMode: OIDCToken}
+	return AccessControl{Signer: signer}
+}
 
+func getAKlessRamRoleArn() (string, error) {
+	accountUID := os.Getenv(accountUIDEnv)
+	if accountUID == "" {
+		return "", errors.New("failed to get account uid from environment variable")
+	}
+	roleName := os.Getenv(roleNameEnv)
+	if roleName == "" {
+		return "", errors.New("failed to get role name from environment variable")
+	}
+	return fmt.Sprintf(roleArnTmpl, accountUID, roleName), nil
 }
 
 // GetEnvAK read ak from local ENV
@@ -390,7 +385,16 @@ func (cred *managedAddonTokenCredv2) GetType() *string {
 	return tea.String("sts")
 }
 
+var credProvider crev2.Credential
+
 func GetCredentialV2() (crev2.Credential, error) {
+	// akless credential provider
+	cred := getAKlessCredProvider()
+	if cred != nil {
+		klog.Infof("credential v2: using akless credential provider")
+		return cred, nil
+	}
+
 	// env variable
 	acLocalAK := GetEnvAK()
 	if len(acLocalAK.AccessKeyID) != 0 && len(acLocalAK.AccessKeySecret) != 0 {
@@ -422,4 +426,24 @@ func GetCredentialV2() (crev2.Credential, error) {
 	klog.Info("credential v2: using ecs_ram_role")
 	config := new(crev2.Config).SetType("ecs_ram_role")
 	return crev2.NewCredential(config)
+}
+
+func getAKlessCredProvider() crev2.Credential {
+	if os.Getenv(authInnerEnv) != "true" {
+		return nil
+	}
+	if credProvider != nil {
+		return credProvider
+	}
+	ramRoleArn, err := getAKlessRamRoleArn()
+	if err != nil {
+		klog.Errorf("getAKlessCredProvider: failed to get akless ram role arn: %v", err)
+		return nil
+	}
+	credProvider, err = credential_provider_factory.GetOpenSDKV2CredProvider(ramRoleArn)
+	if err != nil {
+		klog.Errorf("getAKlessCredProvider: failed to get akless cred provider: %v", err)
+		return nil
+	}
+	return credProvider
 }

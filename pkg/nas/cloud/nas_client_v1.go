@@ -26,7 +26,7 @@ func newNasClientV1(region string) (interfaces.NasV1Interface, error) {
 		_ = aliyunep.AddEndpointMapping(region, "Nas", ep)
 	}
 
-	ac := utils.GetAccessControl()
+	ac := utils.GetAccessControl(true)
 	config := ac.Config
 	if config == nil {
 		config = sdk.NewConfig()
@@ -41,6 +41,9 @@ func newNasClientV1(region string) (interfaces.NasV1Interface, error) {
 		config.Transport = utilshttp.RoundTripperWithHeader(config.Transport, headers)
 	}
 	client, err := nassdk.NewClientWithOptions(region, config, ac.Credential)
+	if ac.UseMode == utils.OIDCToken {
+		client.SetSigner(ac.Signer)
+	}
 	return client, err
 }
 

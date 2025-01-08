@@ -137,7 +137,7 @@ func main() {
 		}
 	}
 
-	ac := utils.GetAccessControl()
+	ac := utils.GetAccessControl(true)
 	ecsClient := utils.NewEcsClient(ac)
 	stsClient := utils.NewStsClient(ac)
 	meta.EnableOpenAPI(ecsClient, stsClient)

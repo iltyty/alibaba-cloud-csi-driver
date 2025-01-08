@@ -37,10 +37,9 @@ type cloud struct {
 }
 
 func newCloud() (Cloud, error) {
-	// Init ECS Client
-	ac := utils.GetAccessControl()
+	ac := utils.GetAccessControl(true)
 	klog.Infof("newCloud: ac: %+v", ac)
-	dfsClient, err := dfs.NewClientWithOptions(GlobalConfigVar.regionID, ac.Config, ac.Credential)
+	dfsClient, err := newDfsClient(ac)
 	if err != nil {
 		return nil, err
 	}
@@ -49,13 +48,32 @@ func newCloud() (Cloud, error) {
 }
 
 func (c *cloud) updateToken() error {
-	ac := utils.GetAccessControl()
-	dfsClient, err := dfs.NewClientWithOptions(GlobalConfigVar.regionID, ac.Config, ac.Credential)
+	ac := utils.GetAccessControl(true)
+	dfsClient, err := newDfsClient(ac)
 	if err != nil {
 		return err
 	}
 	c.dbfc = dfsClient
 	return nil
+}
+
+func newDfsClient(ac utils.AccessControl) (dfsClient *dfs.Client, err error) {
+	regionID := GlobalConfigVar.regionID
+	switch ac.UseMode {
+	case utils.AccessKey:
+		dfsClient, err = dfs.NewClientWithAccessKey(regionID, ac.AccessKeyID, ac.AccessKeySecret)
+	case utils.Credential:
+		dfsClient, err = dfs.NewClientWithOptions(regionID, ac.Config, ac.Credential)
+	default:
+		dfsClient, err = dfs.NewClientWithStsToken(regionID, ac.AccessKeyID, ac.AccessKeySecret, ac.StsToken)
+		if ac.UseMode == utils.OIDCToken {
+			dfsClient.SetSigner(ac.Signer)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return dfsClient, nil
 }
 
 // setPovEndPoint Set Endpoint for pov

@@ -102,6 +102,9 @@ func newEcsClient(regionID string, ac utils.AccessControl) (ecsClient *ecs.Clien
 		ecsClient, err = ecs.NewClientWithOptions(regionID, ac.Config, ac.Credential)
 	default:
 		ecsClient, err = ecs.NewClientWithStsToken(regionID, ac.AccessKeyID, ac.AccessKeySecret, ac.StsToken)
+		if ac.UseMode == utils.OIDCToken {
+			ecsClient.SetSigner(ac.Signer)
+		}
 	}
 	scheme := "HTTPS"
 	if os.Getenv("ALICLOUD_CLIENT_SCHEME") == "HTTP" {
@@ -139,7 +142,7 @@ func newEcsClient(regionID string, ac utils.AccessControl) (ecsClient *ecs.Clien
 }
 
 func updateEcsClient(client *ecs.Client) *ecs.Client {
-	ac := utils.GetAccessControl()
+	ac := utils.GetAccessControl(true)
 	if ac.UseMode == utils.EcsRAMRole || ac.UseMode == utils.ManagedToken || ac.UseMode == utils.OIDCToken {
 		client = newEcsClient(GlobalConfigVar.Region, ac)
 	}

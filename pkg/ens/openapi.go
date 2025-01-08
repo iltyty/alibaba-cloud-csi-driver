@@ -15,7 +15,7 @@ type ENSClient struct {
 }
 
 func newENSClient() ENSClient {
-	accessControl := utils.GetAccessControl()
+	accessControl := utils.GetAccessControl(false)
 
 	config := new(http.Config)
 
@@ -152,7 +152,7 @@ func (ec *ENSClient) DetachVolume(diskID, instanceID string) error {
 func (ec *ENSClient) renewToken() error {
 	klog.Infof("renewToken: currentTime: %s", time.Now().String())
 
-	accessControl := utils.GetAccessControl()
+	accessControl := utils.GetAccessControl(false)
 
 	config := new(http.Config)
 	config.AccessKeyId = &accessControl.AccessKeyID
