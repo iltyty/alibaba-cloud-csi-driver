@@ -80,6 +80,34 @@ pkg/disk/proto/disk.pb.go pkg/disk/proto/disk_ttrpc.pb.go: pkg/disk/disk.proto
 		github.com/containerd/ttrpc/cmd/protoc-gen-go-ttrpc
 	$(PROTOC) -I pkg/disk disk.proto --go_out=pkg/disk --go-ttrpc_out=pkg/disk
 
+CSI_VERSION := $(shell git describe --tags --always)
+csi-agent-bin-linux-x86_64: output/csi-agent-bin-linux-amd64
+	cp $< output/$@
+csi-agent-bin-linux-aarch64: output/csi-agent-bin-linux-arm64
+	cp $< output/$@
+output/csi-agent-bin-%:
+	CGO_ENABLED=0 \
+	GOOS="$(firstword $(subst -, ,$*))" \
+	GOARCH="$(lastword $(subst -, ,$*))" \
+	go build -trimpath \
+		-ldflags "-X github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/version.VERSION=$(CSI_VERSION)" \
+		-o output/csi-agent-bin-$* ./cmd/csi-agent
+
+COMMIT_ID=$(shell git rev-parse --short HEAD)
+RPM_BUILD_TOP_DIR := /tmp/rpmbuild
+csi-agent-release-linux-%: csi-agent-bin-linux-%
+	mkdir -p $(RPM_BUILD_TOP_DIR)/SOURCES/csi-agent $(RPM_BUILD_TOP_DIR)/SPECS $(RPM_BUILD_TOP_DIR)/RPMS $(RPM_BUILD_TOP_DIR)/BUILD $(RPM_BUILD_TOP_DIR)/SRPMS
+	cp -r ./deploy/rpm/csi-agent.spec $(RPM_BUILD_TOP_DIR)/SPECS
+	cp -r $(PWD)/output/csi-agent-bin-linux-$* $(RPM_BUILD_TOP_DIR)/SOURCES/csi-agent/csi-agent
+	tar cvzf $(RPM_BUILD_TOP_DIR)/SOURCES/csi-agent.tar.gz -C $(RPM_BUILD_TOP_DIR)/SOURCES  csi-agent
+	rpmbuild -bb -v \
+		--target $* \
+		--define '_target_os linux' \
+		--define '_topdir $(RPM_BUILD_TOP_DIR)' \
+		--define 'dist $(COMMIT_ID)' \
+		--define '_rpmdir $(PWD)/output' \
+		$(RPM_BUILD_TOP_DIR)/SPECS/csi-agent.spec
+
 .PHONY: clean
 clean:
-	rm -rf bin
+	rm -rf bin output
