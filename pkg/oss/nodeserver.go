@@ -46,6 +46,7 @@ type nodeServer struct {
 	ossfs      mounter.FuseMounterType
 	common.GenericNodeServer
 	skipAttach bool
+	runInECI   bool
 }
 
 const (
@@ -63,6 +64,7 @@ const (
 	defaultMetricsTop = "10"
 	// fuseServiceAccountName
 	fuseServiceAccountName = "csi-fuse-ossfs"
+	ossfsExecPath          = "/usr/local/bin/ossfs"
 )
 
 const (
@@ -176,12 +178,18 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	if socketPath == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "%s not found in publishContext", mountProxySocket)
 	}
-	proxyMounter := mounter.NewProxyMounter(socketPath, ns.rawMounter)
+
+	var ossfsMounter mounter.Mounter
+	if ns.runInECI {
+		ossfsMounter = mounter.NewCmdMounter(ossfsExecPath, ns.rawMounter)
+	} else {
+		ossfsMounter = mounter.NewProxyMounter(socketPath, ns.rawMounter)
+	}
 
 	// When work as csi-agent, directly mount on the target path.
 	if ns.skipAttach {
 		utils.WriteMetricsInfo(metricsPathPrefix, req, opts.MetricsTop, OssFsType, "oss", opts.Bucket)
-		err := proxyMounter.MountWithSecrets(mountSource, targetPath, opts.FuseType, mountOptions, authCfg.Secrets)
+		err := ossfsMounter.MountWithSecrets(mountSource, targetPath, opts.FuseType, mountOptions, authCfg.Secrets)
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
@@ -198,7 +206,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	}
 	if notMnt {
 		utils.WriteSharedMetricsInfo(metricsPathPrefix, req, OssFsType, "oss", opts.Bucket, attachPath)
-		err := mounter.NewProxyMounter(socketPath, ns.rawMounter).MountWithSecrets(
+		err := ossfsMounter.MountWithSecrets(
 			mountSource, attachPath, opts.FuseType, mountOptions, authCfg.Secrets)
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
@@ -309,6 +317,9 @@ func (ns *nodeServer) NodeUnstageVolume(
 	req *csi.NodeUnstageVolumeRequest) (
 	*csi.NodeUnstageVolumeResponse, error) {
 	klog.Infof("NodeUnstageVolume: starting to unmount volume, volumeId: %s, target: %v", req.VolumeId, req.StagingTargetPath)
+	if ns.runInECI {
+		return &csi.NodeUnstageVolumeResponse{}, nil
+	}
 	if !ns.locks.TryAcquire(req.VolumeId) {
 		return nil, status.Errorf(codes.Aborted, "There is already an operation for %s", req.VolumeId)
 	}
