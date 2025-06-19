@@ -21,14 +21,18 @@ func NewProxyMounter(socketPath string, inner mountutils.Interface) Mounter {
 	}
 }
 
-func (m *ProxyMounter) MountWithSecrets(source, target, fstype string, options []string, secrets map[string]string) error {
+func (m *ProxyMounter) MountWithSecrets(source, target, fstype string, options []string, authCfg *AuthConfig) error {
+	if authCfg == nil {
+		return errors.New("empty auth config")
+	}
+
 	dclient := client.NewClient(m.socketPath)
 	resp, err := dclient.Mount(&proxy.MountRequest{
 		Source:  source,
 		Target:  target,
 		Fstype:  fstype,
 		Options: options,
-		Secrets: secrets,
+		Secrets: authCfg.Secrets,
 	})
 	if err != nil {
 		return fmt.Errorf("call mounter daemon: %w", err)

@@ -23,6 +23,7 @@ const (
 	AccountID
 	ClusterID
 	VmocType
+	RRSATokenFile
 )
 
 func (k MetadataKey) String() string {
@@ -41,6 +42,8 @@ func (k MetadataKey) String() string {
 		return "ClusterID"
 	case VmocType:
 		return "VmocType"
+	case RRSATokenFile:
+		return "RRSATokenFile"
 	default:
 		return fmt.Sprintf("MetadataKey(%d)", k)
 	}
