@@ -25,6 +25,7 @@ const (
 	ClusterID
 	VmocType
 	DataPlaneZoneID
+	RRSATokenFile
 )
 
 func (k MetadataKey) String() string {
@@ -45,6 +46,8 @@ func (k MetadataKey) String() string {
 		return "VmocType"
 	case DataPlaneZoneID:
 		return "DataPlaneZoneID"
+	case RRSATokenFile:
+		return "RRSATokenFile"
 	default:
 		return fmt.Sprintf("MetadataKey(%d)", k)
 	}
