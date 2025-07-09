@@ -21,7 +21,7 @@ import (
 
 var defaultOssfsImageTag = "v1.88.4-80d165c-aliyun"
 var defaultOssfsUpdatedImageTag = "v1.91.6.ack.1-fca3971-aliyun"
-var defaultOssfsDbglevel = utils.DebugLevelError
+var defaultOssfsDbglevel = utils.DebugLevelWarn
 
 const (
 	hostPrefix                = "/host"
@@ -321,6 +321,17 @@ func (f *fuseOssfs) AddDefaultMountOptions(options []string) []string {
 			}
 			options = append(options, fmt.Sprintf("dbglevel=%s", ossfsDbglevels[defaultOssfsDbglevel]))
 		}
+	}
+
+	var allowOther bool
+	for _, option := range options {
+		if strings.Contains(option, "allow_other") {
+			allowOther = true
+			break
+		}
+	}
+	if !allowOther {
+		options = append(options, "allow_other")
 	}
 
 	if !csiutils.IsFileExisting(filepath.Join(hostPrefix, OssfsDefMimeTypesFilePath)) && strings.ToLower(f.config.Extra["mime-support"]) == "true" {
