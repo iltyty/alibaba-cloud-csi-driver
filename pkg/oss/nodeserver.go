@@ -18,6 +18,7 @@ package oss
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -26,7 +27,7 @@ import (
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/common"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/features"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter"
-	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/oss"
+	ossfpm "github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/fuse_pod_manager/oss"
 	mounterutils "github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/utils"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/utils"
 	"google.golang.org/grpc/codes"
@@ -43,7 +44,7 @@ type nodeServer struct {
 	clientset       kubernetes.Interface
 	cnfsGetter      cnfsv1beta1.CNFSGetter
 	rawMounter      mountutils.Interface
-	fusePodManagers map[string]*oss.OSSFusePodManager
+	fusePodManagers map[string]*ossfpm.OSSFusePodManager
 	ossfsPaths      map[string]string
 	common.GenericNodeServer
 	skipAttach bool
@@ -157,24 +158,33 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	// Note: In ACK and ACS GPU scenarios, the socket path is provided by publishContext.
 	var ossfsMounter mounter.Mounter
 	if socketPath == "" {
-		mountOptions, err = mounterutils.AppendRRSAAuthOptions(ns.metadata, mountOptions, req.VolumeId, targetPath, authCfg)
+		mountOptions, err = ossfpm.AppendRRSAAuthOptions(ns.metadata, mountOptions, req.VolumeId, targetPath, authCfg)
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
-		ossfsMounter = mounter.NewOssCmdMounter(ns.ossfsPaths[opts.FuseType], req.VolumeId, ns.rawMounter)
+		interceptors, ok := ossfpm.GetFuseMountInterceptors(opts.FuseType)
+		if !ok {
+			klog.ErrorS(errors.New("error getting fuse mount interceptors"), "no interceptors found", "fuseType", opts.FuseType)
+		}
+		ossfsMounter = mounter.NewForMounter(
+			mounter.NewOssCmdMounter(ns.ossfsPaths[opts.FuseType], req.VolumeId, ns.rawMounter),
+			interceptors...,
+		)
 	} else {
-		ossfsMounter = mounter.NewProxyMounter(socketPath, ns.rawMounter)
+		ossfsMounter = mounter.NewForMounter(mounter.NewProxyMounter(socketPath, ns.rawMounter))
 	}
 
 	// When work as csi-agent, directly mount on the target path.
 	if ns.skipAttach {
 		metricsPath := utils.WriteMetricsInfo(metricsPathPrefix, req, opts.MetricsTop, opts.FuseType, "oss", opts.Bucket)
-		err := ossfsMounter.ExtendedMount(
-			mountSource, targetPath, opts.FuseType,
-			mountOptions, &mounter.ExtendedMountParams{
-				Secrets:     authCfg.Secrets,
-				MetricsPath: metricsPath,
-			})
+		err := ossfsMounter.ExtendedMount(ctx, &mounter.MountOperation{
+			Source:      mountSource,
+			Target:      targetPath,
+			FsType:      opts.FuseType,
+			Options:     mountOptions,
+			Secrets:     authCfg.Secrets,
+			MetricsPath: metricsPath,
+		})
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
@@ -191,12 +201,14 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	}
 	if notMnt {
 		metricsPath := utils.WriteSharedMetricsInfo(metricsPathPrefix, req, opts.FuseType, "oss", opts.Bucket, attachPath)
-		err := ossfsMounter.ExtendedMount(
-			mountSource, attachPath, opts.FuseType,
-			mountOptions, &mounter.ExtendedMountParams{
-				Secrets:     authCfg.Secrets,
-				MetricsPath: metricsPath,
-			})
+		err := ossfsMounter.ExtendedMount(ctx, &mounter.MountOperation{
+			Source:      mountSource,
+			Target:      attachPath,
+			FsType:      opts.FuseType,
+			Options:     mountOptions,
+			Secrets:     authCfg.Secrets,
+			MetricsPath: metricsPath,
+		})
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
@@ -269,7 +281,7 @@ func (ns *nodeServer) NodeUnstageVolume(
 	// The metricsPath in fuse Pod will be cleaned and not allowed to update the metrics
 	utils.RemoveMetrics(metricsPathPrefix, req)
 
-	// In the legacy mount process, NodePublishVolume creates ossfs pods in kube-system namespace to mount oss.
+	// In the legacy mount process, NodePublishVolume creates ossfs pods in kube-system namespace to mount ossfpm.
 	// We still need to umount the mountpoint in case csi-plugin is upgraded from these versions.
 	err = mountutils.CleanupMountPoint(req.StagingTargetPath, ns.rawMounter, false)
 	if err != nil {

@@ -31,9 +31,9 @@ import (
 	"strings"
 	"time"
 
+	openapi "github.com/alibabacloud-go/darabonba-openapi/v2/client"
 	aliyunep "github.com/aliyun/alibaba-cloud-sdk-go/sdk/endpoints"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/sts"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/go-ping/ping"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/options"
@@ -164,21 +164,22 @@ func CreateEvent(recorder record.EventRecorder, objectRef *v1.ObjectReference, e
 
 // NewEventRecorder is create snapshots event recorder
 func NewEventRecorder() record.EventRecorder {
-	cfg, err := options.GetRestConfig()
-	if err != nil {
-		klog.Fatalf("Error building kubeconfig: %s", err.Error())
-	}
-	clientset, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		klog.Fatalf("NewControllerServer: Failed to create client: %v", err)
-	}
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartLogging(klog.Infof)
-	source := v1.EventSource{Component: "csi-controller-server"}
-	sink := &v1core.EventSinkImpl{
-		Interface: v1core.New(clientset.CoreV1().RESTClient()).Events(""),
+	cfg, err := options.GetRestConfig()
+	if err != nil {
+		klog.ErrorS(err, "Error building kubeconfig for events")
+	} else {
+		clientset, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			klog.Fatalf("NewControllerServer: Failed to create client: %v", err)
+		}
+		sink := &v1core.EventSinkImpl{
+			Interface: clientset.CoreV1().Events(""),
+		}
+		broadcaster.StartRecordingToSink(sink)
 	}
-	broadcaster.StartRecordingToSink(sink)
+	source := v1.EventSource{Component: "csi-controller-server"}
 	return broadcaster.NewRecorder(scheme.Scheme, source)
 }
 
@@ -272,27 +273,23 @@ func NewEcsClient(ac AccessControl) (ecsClient *ecs.Client) {
 	return
 }
 
-// NewStsClient create a stsClient object
-// TODO: The current region is set to the default value. Need to obtain the actual region.
-func NewStsClient(ac AccessControl) (stsClient *sts.Client) {
-	if ep := os.Getenv("STS_ENDPOINT"); ep != "" {
-		_ = aliyunep.AddEndpointMapping(DefaultRegion, "Sts", ep)
+func getOpenAPIConfig(regionID string) *openapi.Config {
+	config := &openapi.Config{RegionId: &regionID}
+	if e := os.Getenv("ALICLOUD_CLIENT_SCHEME"); e != "" {
+		config.Protocol = &e
 	}
-	var err error
-	switch ac.UseMode {
-	case AccessKey:
-		stsClient, err = sts.NewClientWithAccessKey(DefaultRegion, ac.AccessKeyID, ac.AccessKeySecret)
-	case Credential:
-		stsClient, err = sts.NewClientWithOptions(DefaultRegion, ac.Config, ac.Credential)
-	default:
-		stsClient, err = sts.NewClientWithStsToken(DefaultRegion, ac.AccessKeyID, ac.AccessKeySecret, ac.StsToken)
+	if e := os.Getenv("ALIBABA_CLOUD_NETWORK_TYPE"); e != "" {
+		config.Network = &e
+	}
+	return config
+}
 
+func GetStsConfig(regionID string) *openapi.Config {
+	config := getOpenAPIConfig(regionID)
+	if e := os.Getenv("STS_ENDPOINT"); e != "" {
+		config.Endpoint = &e
 	}
-
-	if err != nil {
-		return nil
-	}
-	return
+	return config
 }
 
 // IsDir check file is directory

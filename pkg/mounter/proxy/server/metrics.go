@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -80,6 +79,12 @@ func (manager *MountMonitorManager) GetMountMonitor(
 		return nil, false
 	}
 
+	// Ensure metricsPath directory exists for rund (agent mode)
+	if err := os.MkdirAll(metricsPath, 0755); err != nil {
+		klog.ErrorS(err, "Failed to create metrics path directory", "path", metricsPath, "target", target)
+		return nil, false
+	}
+
 	// Create new monitor
 	monitor = &MountMonitor{
 		Target:        target,
@@ -125,15 +130,15 @@ func (m *MountMonitor) HandleMountFailureOrExit(err error) {
 }
 
 // HandleMountSuccess handles the case when mount operation succeeds
-func (m *MountMonitor) HandleMountSuccess(process *exec.Cmd) {
+func (m *MountMonitor) HandleMountSuccess(pid int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Update metrics for mount success
 	m.updateMountPointMetrics(&m.retryCount, nil, nil)
 
+	m.Pid = pid
 	m.State = MonitorStateMonitoring
-	m.Pid = process.Process.Pid
 
 	klog.InfoS("Mount succeeded", "target", m.Target, "pid", m.Pid)
 }
@@ -251,7 +256,7 @@ func (m *MountMonitor) updateMountPointMetrics(
 		// Update mount_retry_count
 		retryFile := filepath.Join(m.MetricsPath, utils.MetricsMountRetryCount)
 		if err := os.WriteFile(retryFile, []byte(strconv.Itoa(*retryCont)), 0644); err != nil {
-			klog.ErrorS(err, "Failed to update %s", utils.MetricsMountRetryCount)
+			klog.ErrorS(err, "Failed to update metrics", "key", utils.MetricsMountRetryCount, "val", *retryCont)
 		}
 		klog.V(5).Infof("Update %s: %d", utils.MetricsMountRetryCount, *retryCont)
 	}
@@ -259,7 +264,7 @@ func (m *MountMonitor) updateMountPointMetrics(
 		// Update mount_point_failover_count
 		failoverFile := filepath.Join(m.MetricsPath, utils.MetricsMountPointFailoverCount)
 		if err := os.WriteFile(failoverFile, []byte(strconv.Itoa(*failoverCont)), 0644); err != nil {
-			klog.ErrorS(err, "Failed to update %s: %v", utils.MetricsMountPointFailoverCount, err)
+			klog.ErrorS(err, "Failed to update metrics", "key", utils.MetricsMountPointFailoverCount, "val", *failoverCont)
 		}
 		klog.V(5).Infof("Update %s: %d", utils.MetricsMountPointFailoverCount, *failoverCont)
 	}
@@ -269,7 +274,7 @@ func (m *MountMonitor) updateMountPointMetrics(
 		currentTime := time.Now().Format(time.RFC3339)
 		errorMessage := fmt.Sprintf("%s:: %s", currentTime, lastExistError.Error())
 		if err := os.WriteFile(statusFile, []byte(errorMessage), 0644); err != nil {
-			klog.ErrorS(err, "Failed to update %s: %v", utils.MetricsLastFuseClientExitReason, err)
+			klog.ErrorS(err, "Failed to update metrics", "key", utils.MetricsLastFuseClientExitReason, "val", errorMessage)
 		}
 		klog.V(5).Infof("Update %s: %s", utils.MetricsLastFuseClientExitReason, errorMessage)
 	}
@@ -278,7 +283,7 @@ func (m *MountMonitor) updateMountPointMetrics(
 		// Update mount_point_status
 		statusFile := filepath.Join(m.MetricsPath, utils.MetricsMountPointStatus)
 		if err := os.WriteFile(statusFile, []byte(boolToBinaryString(notHealthy)), 0644); err != nil {
-			klog.ErrorS(err, "Failed to update %s: %v", utils.MetricsMountPointStatus, err)
+			klog.ErrorS(err, "Failed to update metrics", "key", utils.MetricsMountPointStatus, "val", boolToBinaryString(notHealthy))
 		}
 		klog.V(5).Infof("Update %s: %t", utils.MetricsMountPointStatus, notHealthy)
 	}
