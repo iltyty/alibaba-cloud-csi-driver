@@ -47,7 +47,7 @@ type nodeServer struct {
 	fusePodManagers map[string]*ossfpm.OSSFusePodManager
 	ossfsPaths      map[string]string
 	common.GenericNodeServer
-	skipAttach bool
+	skipGlobalMount bool
 }
 
 const (
@@ -87,12 +87,12 @@ func validateNodePublishVolumeRequest(req *csi.NodePublishVolumeRequest) error {
 // Runtime types when using proxy mounter: runc & rund
 // Runtime types when using cmd mounter: MicroVM
 //
-// opts.DirectAssigned is configured via PV attributes to declare whether skipAttach is needed. true: COCO or rund
+// opts.DirectAssigned is configured via PV attributes to declare whether skipGlobalMount is needed. true: COCO or rund
 // Explanation: opts.DirectAssigned was originally used to declare COCO, and later extended to distinguish
 //   runc&rund mixed deployment scenarios, where true means rund, false means runc
 // Note: opts.DirectAssigned defaults to false, and only has meaning when true. When false, it may represent
 //   various runtime types other than COCO depending on different runtime environments
-// ns.skipAttach: nodeserver configuration exclusive to csi-agent binary. true: rund or MicroVM
+// ns.skipGlobalMount: nodeserver configuration exclusive to csi-agent binary. true: rund or MicroVM
 // socketPath: socket path used to communicate with proxy mounter. non-empty: runc or rund
 
 func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
@@ -139,13 +139,13 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 
 	socketPath := req.PublishContext[mountProxySocket]
 
-	// Determine runtime type based on directAssigned, socketPath, and skipAttach
+	// Determine runtime type based on directAssigned, socketPath, and skipGlobalMount
 	// See DetermineRuntimeType for the support matrix.
-	runtimeType, err := DetermineRuntimeType(opts.DirectAssigned, socketPath, ns.skipAttach)
+	runtimeType, err := DetermineRuntimeType(opts.DirectAssigned, socketPath, ns.skipGlobalMount)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "failed to determine runtime type: %v", err)
 	}
-	klog.V(4).InfoS("Determined runtime type", "runtimeType", runtimeType, "directAssigned", opts.DirectAssigned, "hasSocketPath", socketPath != "", "skipAttach", ns.skipAttach)
+	klog.V(4).InfoS("Determined runtime type", "runtimeType", runtimeType, "directAssigned", opts.DirectAssigned, "hasSocketPath", socketPath != "", "skipGlobalMount", ns.skipGlobalMount)
 
 	// check and make auth config
 	authCfg, err := makeAuthConfig(opts, ns.fusePodManagers[opts.FuseType], ns.metadata, true)
@@ -153,7 +153,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	// Handle COCO scenario: directAssigned=true, skipAttach=false
+	// Handle COCO scenario: directAssigned=true, skipGlobalMount=false
 	if runtimeType == RuntimeTypeCOCO {
 		return ns.publishDirectVolume(ctx, req, opts)
 	}
